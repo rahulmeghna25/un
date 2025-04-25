@@ -34,7 +34,7 @@ BOT_CONFIG_FILE = "bot_configs.json"
 BOT_DATA_DIR = "bot_data"  # Directory to store each bot's data
 
 # Bot Configuration
-TELEGRAM_BOT_TOKEN = '8155654788:AAHHDwR2ZCyaW61ubZB-3rlqAi01EwQI9KA'
+TELEGRAM_BOT_TOKEN = '8155654788:AAHHsHgfnmCUjG7dW33TesGQzxL2zW__oC0'
 OWNER_USERNAME = "DEMONBAAPP"
 CO_OWNERS = []  # List of user IDs for co-owners
 OWNER_CONTACT = "Contact to buy keys"
